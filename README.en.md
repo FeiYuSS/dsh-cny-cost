@@ -39,6 +39,32 @@ Source: <https://api-docs.deepseek.com/zh-cn/quick_start/pricing/> (built-in sna
   year's holiday schedule. Configured prices are stored at 0.001 CNY/M resolution; finer prices
   are rejected instead of silently rounded.
 
+## Official pricing auto-check (optional, on by default)
+
+The plugin periodically checks whether DeepSeek's official pricing changed and offers to start
+an update session when it did:
+
+- **Browser-only runtime.** The official docs site sends no CORS header, so a page cannot read
+  `api-docs.deepseek.com` directly (command line tools are unaffected). A GitHub Actions job in
+  this repository mirrors the official `pricing.md` into `pricing/official-zh.json` hourly; the
+  browser plugin polls that static file on `raw.githubusercontent.com`, which allows CORS. There
+  is no self-hosted service and no extra Host API.
+- **Change dialog.** When prices/rules differ from the acknowledged snapshot, a dialog built from
+  DSH UI primitives lists each change. “Start update session” creates a new session with a
+  prepared prompt: the agent reviews the official page, updates `logic.js` defaults
+  (prices, holidays, model aliases), tests and docs, then reports back. It never publishes on its
+  own.
+- **Settings tab.** Settings → Built-in plugins → “Token pricing” configures the automatic check,
+  the interval (1 hour – 30 days), a check-now button and a manual rule-update button, and shows
+  the last/next check, the acknowledged snapshot, the mirror sync time and pending changes.
+- **Persistence.** Settings live in the browser's localStorage, per browser; nothing is written
+  to the profile.
+- **Latency.** The mirror is refreshed hourly, so detection can lag by up to an hour; a mirror
+  older than 7 days is flagged in the settings tab. After a real pricing change, a new plugin
+  release is still required for installed users to get the new rules.
+
+See [docs/pricing-watch.md](./docs/pricing-watch.md) for the design and state machine.
+
 ## Install
 
 This package is a standard DSH bundle, so the `cordis.patch.yml` declared by
@@ -126,19 +152,27 @@ include unpriced non-official calls, but the cost only prices configured models.
   history (matching the host `tokenUsage` projection).
 - Compressed/pruned history is still billed (whole-session accounting), and attempts without a
   usage report are not billed.
+- The automatic pricing check only runs while a Harness page is open; a closed page catches up
+  on the next open according to the interval.
+- Detection relies on the CI-maintained static mirror (official site has no CORS), so it can lag
+  by up to one sync cycle.
+- Pricing-watch settings are stored per browser in localStorage.
 
 ## Development
 
-Pure pricing and fold logic lives in `logic.js` with no dependencies:
-
 ```text
-npm test                  # node --test test/logic.test.mjs
+npm test                  # node --test: pricing, fold logic, client module, mirror (34 tests)
 npm run check:locale      # every t('key') exists in both locale blocks
-npm run check:package     # package name, patch row, loader id and exports agree
+npm run check:package     # package name, patch row, loader id, exports, mirror/baseline
 npm run check             # all of the above
+npm run sync:pricing      # refresh pricing/official-zh.json from the official page
 ```
 
-`scripts/verify-against-host.mjs` cross-checks the plugin fold against an independent reference
+`test/client-pricing.test.mjs` extracts the browser-embedded pricing watcher from `client.js` and
+checks that its parsing/diff/prompt logic matches the Node implementation, then loads the client
+module in a stub browser environment to confirm all four slot registrations.
+
+`scripts/verify-against-host.mjs` cross-checks the cost fold against an independent reference
 implementation and the host's persisted `tokenUsage` checkpoint (set `DSH_HOME` to your DSH home):
 
 ```text

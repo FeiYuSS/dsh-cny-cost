@@ -91,6 +91,25 @@ check('README and package agree on the license', () => {
   if (!/\[MIT\]\(\.\/LICENSE\)/.test(readme)) throw new Error('README does not link the MIT license');
 });
 
+check('the pricing mirror snapshot is well formed', () => {
+  const mirror = JSON.parse(read('pricing/official-zh.json'));
+  if (mirror.version !== 1) throw new Error('mirror version is ' + mirror.version);
+  if (!/^[a-f0-9]{64}$/.test(mirror.hash)) throw new Error('mirror hash is not sha256 hex');
+  if (!mirror.facts || typeof mirror.facts.models !== 'object') throw new Error('mirror facts are missing');
+});
+
+check('client.js embeds the pricing baseline and watch markers', () => {
+  if (!client.includes('//<<<pricing-watch')) throw new Error('pricing-watch start marker is missing');
+  if (!client.includes('//>>>pricing-watch')) throw new Error('pricing-watch end marker is missing');
+  if (!/"hash":\s*"[a-f0-9]{64}"/.test(client)) throw new Error('bundled snapshot hash is missing');
+  if (!client.includes('@deepseek-ai/dsh-client-ui-primitives')) throw new Error('primitives fallback is missing');
+});
+
+check('the pricing mirror workflow is present', () => {
+  if (!exists('.github/workflows/pricing-mirror.yml')) throw new Error('pricing-mirror workflow is missing');
+  if (!String(pkg.files).includes('pricing-watch.js')) throw new Error('pricing-watch.js is not published');
+});
+
 console.log('');
 if (problems.length === 0) {
   console.log('PACKAGE CHECK PASSED');

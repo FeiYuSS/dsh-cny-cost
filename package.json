@@ -1,7 +1,7 @@
 {
   "name": "dsh-cny-cost",
-  "version": "0.1.0",
-  "description": "DSH Web plugin that shows the theoretical CNY cost of DeepSeek official model usage under the composer and at the end of every turn, with a per-model, per-period pricing breakdown.",
+  "version": "0.2.0",
+  "description": "DSH Web plugin that shows the theoretical CNY cost of DeepSeek official model usage under the composer and at the end of every turn, and watches the official pricing page for changes with a one-click rule-update session.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -39,6 +39,7 @@
     "index.js",
     "logic.js",
     "client.js",
+    "pricing-watch.js",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -46,6 +47,7 @@
     "README.en.md",
     "LICENSE",
     "CHANGELOG.md",
+    "docs",
     "scripts"
   ],
   "engines": {
@@ -53,11 +55,12 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "scripts": {
-    "test": "node --test test/logic.test.mjs",
+    "test": "node --test",
     "check:locale": "node scripts/check-locale-keys.mjs",
     "check:package": "node scripts/check-package.mjs",
     "check": "npm run test && npm run check:locale && npm run check:package",
-    "verify:host": "node scripts/verify-against-host.mjs"
+    "verify:host": "node scripts/verify-against-host.mjs",
+    "sync:pricing": "node scripts/sync-pricing-mirror.mjs"
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },

@@ -1,0 +1,40 @@
+name: pricing-mirror
+
+# The browser half cannot fetch api-docs.deepseek.com directly: that host sends
+# no CORS header, so a page-side fetch is blocked (CLI tools are not). This job
+# keeps a CORS-friendly static snapshot in the repository; the plugin polls
+# raw.githubusercontent.com and does all detection, UI and session launching in
+# the browser.
+on:
+  schedule:
+    # Hourly. Official pricing changes rarely; this bounds detection latency.
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Fetch official pricing snapshot
+        run: node scripts/sync-pricing-mirror.mjs
+
+      - name: Commit the mirror only when the official page changed
+        run: |
+          if git diff --quiet -- pricing/official-zh.json; then
+            echo "pricing mirror unchanged"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pricing/official-zh.json
+          git commit -m "chore: sync DeepSeek official pricing snapshot"
+          git push

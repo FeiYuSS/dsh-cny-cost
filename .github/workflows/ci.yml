@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -29,12 +29,14 @@ jobs:
           node --check index.js
           node --check logic.js
           node --check client.js
+          node --check pricing-watch.js
           node --check scripts/check-locale-keys.mjs
           node --check scripts/check-package.mjs
+          node --check scripts/sync-pricing-mirror.mjs
           node --check scripts/verify-against-host.mjs
 
-      - name: Unit tests (pricing and fold logic)
-        run: node --test test/logic.test.mjs
+      - name: Unit tests (pricing, fold logic and client module)
+        run: node --test
 
       - name: Locale keys used from client.js exist in both locales
         run: node scripts/check-locale-keys.mjs

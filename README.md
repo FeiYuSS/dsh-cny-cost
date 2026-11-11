@@ -27,6 +27,18 @@ token 用量换算成**理论人民币成本**，并显示在三处：
 > 回合操作行里的费用 pill 依赖会话日志里记录的最后一条 Assistant 消息 id 与回合对应。
 > 插件更新 Host 半侧后需要重启 DSH 才会切换到该精确映射；重启前客户端会退化为从 Chat 视图反查回合，功能一致。
 
+## 官方定价自动检查（可选，默认开启）
+
+插件会定期检查 DeepSeek 官方定价是否变化，变化时弹窗询问是否新建会话更新计费规则：
+
+- **纯浏览器实现**：官方文档站不返回 CORS 头，网页无法直接读取 `api-docs.deepseek.com`（命令行工具不受影响）。仓库里的 GitHub Actions 每小时把官方 `pricing.md` 解析成 `pricing/official-zh.json` 静态快照，浏览器插件轮询 `raw.githubusercontent.com`（该域允许 CORS）。运行时没有自建服务，Host 半侧也没有新增接口。
+- **变化弹窗**：价格/规则与已确认快照不同时，用 DSH 通用组件样式弹出全局对话框，列出逐条变化。点「新建会话并更新规则」会新建会话并自动填入更新提示词：Agent 核对官方页面、修改 `logic.js` 的默认价格/节假日/模型别名、更新测试与文档，然后汇报；**不会自动发布**。
+- **设置标签页**：设置 → 内置插件 →「Token 计价」可配置自动检查开关、检查周期（1 小时–30 天）、立即检查、手动发起规则更新；同时显示上次/下次检查、已确认快照、镜像同步时间与待确认变化。
+- **设置保存位置**：浏览器 localStorage（每个浏览器各自保存），不写入 profile 配置。
+- **延迟与维护**：镜像每小时同步一次，最多约 1 小时延迟；若镜像超过 7 天未更新，设置页会提示检查 GitHub Actions。官方改价后，需要按更新会话的产出发布新版本插件，已安装用户才会拿到新计价规则。
+
+设计取舍与状态机见 [docs/pricing-watch.md](./docs/pricing-watch.md)。
+
 ## 计价依据
 
 官方文档「模型 & 价格」：<https://api-docs.deepseek.com/zh-cn/quick_start/pricing/>
@@ -140,20 +152,26 @@ C:\Users\you\src\dsh-cny-cost
 - 已压缩/剪枝的历史仍计入费用（计费是全会话口径）。
 - 未上报 usage 的尝试（如中断且无 usage）不计费。
 - 每个回合的明细只展示该回合的聚合结果；一个回合内混用多个模型时会提示「分模型单价见会话费用明细」。
+- 自动定价检查只在 Harness 页面打开时轮询；页面关闭期间不检查，下次打开会按周期补检。
+- 官方文档站没有 CORS 头，浏览器无法直连官方页；检测基于 GitHub Actions 维护的静态镜像，最多约 1 小时延迟。
+- 自动检查的设置保存在当前浏览器的 localStorage，不同浏览器/设备各自独立。
 
 ## 开发与测试
 
 纯计价/折叠逻辑在 `logic.js`，不依赖任何包，可直接用 Node 测试：
 
 ```text
-npm test                      # node --test test/logic.test.mjs
+npm test                      # node --test（计价/折叠/客户端模块/镜像校验，共 34 项）
 npm run check:locale          # 校验 client.js 用到的文案键在中英文里都存在
-npm run check:package         # 校验包名、patch 行、loader id、exports 一致
+npm run check:package         # 校验包名、patch 行、loader id、exports、镜像与 client 基线一致
 npm run check                 # 以上全部
+npm run sync:pricing          # 手动拉取官方 pricing.md 并刷新 pricing/official-zh.json
 ```
 
 测试覆盖峰谷边界（含周末、法定节假日）、模型别名、缓存分桶、同 step 替换、重试另计、
-逐回合落账、金额精度、配置校验与视图/状态校验。
+逐回合落账、金额精度、配置校验与视图/状态校验；`test/client-pricing.test.mjs` 还会从
+`client.js` 中提取浏览器内置的定价检查模块，校验其解析/差异/提示词与 Node 版一致，
+并模拟加载客户端模块确认四个 slot 注册。
 
 装好本插件后还可以用真实会话日志做端到端核对（需要 `DSH_HOME` 指向 DSH 主目录）：
 
