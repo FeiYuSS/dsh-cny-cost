@@ -9,6 +9,10 @@ window.__ModuleLoader__.load({
     const TURN_KEY = 'deepseekTurnCost';
     const NANO = 1e9;
     const MEASURE_STYLE = { position: 'fixed', top: '0px', left: '0px', visibility: 'hidden' };
+    // Every assistant action row mounts its own control; one projection refresh
+    // per Session is enough because the projection face is shared by all of them.
+    const refreshedProjections = new Set();
+    let idCounter = 0;
 
     // -----------------------------------------------------------------------
     // Text. View text follows the active locale read from the Client locale
@@ -48,6 +52,7 @@ window.__ModuleLoader__.load({
         unpriced: '{count} non-official model call(s) excluded from pricing',
         note: 'Theoretical value, priced by each request’s completion time. Peak = Beijing workdays 09:00–12:00 and 14:00–18:00 (PRC statutory holidays excluded). Search/Fetch request fees are not included.',
         source: 'Source: api-docs.deepseek.com/zh-cn/quick_start/pricing',
+        mixedHint: 'This turn used more than one model; per-model prices are in the session cost detail.',
         'detail.period': 'Period',
         'detail.model': 'Model',
         'detail.calls': 'Calls',
@@ -87,6 +92,7 @@ window.__ModuleLoader__.load({
         unpriced: '{count} 次非官方模型调用未计价',
         note: '理论值：按每次请求完成时刻归入高峰/空闲。高峰为北京时间工作日 09:00–12:00、14:00–18:00（不含中国法定节假日）。搜索/抓取按次计费不计入。',
         source: '价格来源：api-docs.deepseek.com/zh-cn/quick_start/pricing',
+        mixedHint: '本回合包含多个模型，分模型单价见会话费用明细。',
         'detail.period': '时段',
         'detail.model': '模型',
         'detail.calls': '调用',
@@ -117,12 +123,10 @@ window.__ModuleLoader__.load({
       return integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
 
-    function formatCNY(nano, forceDecimals) {
+    function formatCNY(nano) {
       const value = (Number(nano) || 0) / NANO;
       if (value === 0) return '0';
-      const decimals = forceDecimals !== undefined
-        ? forceDecimals
-        : (value >= 1 ? 2 : value >= 0.01 ? 4 : 6);
+      const decimals = value >= 1 ? 2 : value >= 0.01 ? 4 : 6;
       const parts = value.toFixed(decimals).split('.');
       return parts.length > 1 ? groupThousands(parts[0]) + '.' + parts[1] : groupThousands(parts[0]);
     }
@@ -133,11 +137,21 @@ window.__ModuleLoader__.load({
       return text;
     }
 
+    const TOKEN_TIERS = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+
     function formatTokens(count) {
       const value = Number(count) || 0;
-      if (value >= 1e9) return trimNumber(value / 1e9) + 'B';
-      if (value >= 1e6) return trimNumber(value / 1e6) + 'M';
-      if (value >= 1e3) return trimNumber(value / 1e3) + 'K';
+      for (let index = 0; index < TOKEN_TIERS.length; index += 1) {
+        const [unit, suffix] = TOKEN_TIERS[index];
+        if (value < unit) continue;
+        let scaled = value / unit;
+        let label = suffix;
+        // 999_950 must read as 1M, not 1000K.
+        if (index > 0 && scaled >= 999.95) {
+          [scaled, label] = [value / TOKEN_TIERS[index - 1][0], TOKEN_TIERS[index - 1][1]];
+        }
+        return trimNumber(scaled) + label;
+      }
       return String(Math.round(value));
     }
 
@@ -230,6 +244,8 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (!sessions || !sessionId || typeof sessions.refreshProjections !== 'function') return;
+        if (refreshedProjections.has(sessionId)) return;
+        refreshedProjections.add(sessionId);
         try {
           const pending = sessions.refreshProjections(sessionId);
           if (pending && typeof pending.catch === 'function') pending.catch(() => {});
@@ -324,6 +340,18 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = React.useState(false);
       const rootRef = React.useRef(null);
       const panelRef = React.useRef(null);
+      const restoreFocusRef = React.useRef(null);
+      React.useEffect(() => {
+        if (!open) return undefined;
+        restoreFocusRef.current = typeof document === 'undefined' ? null : document.activeElement;
+        const panel = panelRef.current;
+        if (panel && typeof panel.focus === 'function') panel.focus();
+        return () => {
+          const previous = restoreFocusRef.current;
+          restoreFocusRef.current = null;
+          if (previous && typeof previous.focus === 'function') previous.focus();
+        };
+      }, [open]);
       React.useEffect(() => {
         if (!open) return undefined;
         const onKeyDown = (event) => {
@@ -376,35 +404,32 @@ window.__ModuleLoader__.load({
      * Resolve the turn whose closing Assistant message owns this action row.
      * Prefers the cost projection's recorded message id; the Chat snapshot is
      * the fallback for hosts whose projection generation predates it.
+     * Called only from the variant that knows the host passes `useChat`.
      */
-    function useChatTurnForMessage(props, messageId) {
-      const useChat = props.useChat;
-      const fromChat = typeof useChat === 'function'
-        ? useChat((snapshot) => {
-          try {
-            const timeline = snapshot && snapshot.timeline;
-            const turns = timeline && timeline.turns;
-            if (!turns) return null;
-            let found = null;
-            const inspect = (record, turn) => {
-              if (found !== null) return;
-              const data = record && record.data;
-              const tail = data && typeof data.get === 'function' ? data.get('turn-tail') : undefined;
-              const id = tail && tail.closing && tail.closing.finalNode ? tail.closing.finalNode.messageId : undefined;
-              if (id !== undefined && id === messageId) found = turn;
-            };
-            if (typeof turns.forEach === 'function') {
-              turns.forEach((record, turn) => inspect(record, turn));
-            } else if (typeof turns === 'object') {
-              for (const key of Object.keys(turns)) inspect(turns[key], Number(key));
-            }
-            return found;
-          } catch {
-            return null;
+    function useChatTurnForMessage(useChat, messageId) {
+      return useChat((snapshot) => {
+        try {
+          const timeline = snapshot && snapshot.timeline;
+          const turns = timeline && timeline.turns;
+          if (!turns) return null;
+          let found = null;
+          const inspect = (record, turn) => {
+            if (found !== null) return;
+            const data = record && record.data;
+            const tail = data && typeof data.get === 'function' ? data.get('turn-tail') : undefined;
+            const id = tail && tail.closing && tail.closing.finalNode ? tail.closing.finalNode.messageId : undefined;
+            if (id !== undefined && id === messageId) found = turn;
+          };
+          if (typeof turns.forEach === 'function') {
+            turns.forEach((record, turn) => inspect(record, turn));
+          } else if (typeof turns === 'object') {
+            for (const key of Object.keys(turns)) inspect(turns[key], Number(key));
           }
-        })
-        : null;
-      return fromChat;
+          return found;
+        } catch {
+          return null;
+        }
+      });
     }
 
     function findTurnRecord(data, messageId, chatTurn) {
@@ -470,6 +495,32 @@ window.__ModuleLoader__.load({
       '.dsh-tc-turn-list{display:grid;gap:2px}',
       '.dsh-tc-turn-line{display:flex;justify-content:space-between;gap:12px}',
     ].join('');
+
+    /**
+     * Inject the static stylesheet once per page. Client HMR may re-run this
+     * module in place, so the tag itself is the guard against duplicates.
+     */
+    function installStyles() {
+      if (typeof document === 'undefined' || !document.head) return;
+      if (document.querySelector('style[data-dsh-cny-cost]')) return;
+      const style = document.createElement('style');
+      style.setAttribute('data-dsh-cny-cost', '');
+      style.textContent = CSS;
+      document.head.appendChild(style);
+    }
+
+    /** Page-unique ids for one control's bubble and panel. */
+    function useControlIds() {
+      const ref = React.useRef(null);
+      if (ref.current === null) {
+        idCounter += 1;
+        ref.current = {
+          panel: 'dsh-cny-cost-panel-' + idCounter,
+          bubble: 'dsh-cny-cost-bubble-' + idCounter,
+        };
+      }
+      return ref.current;
+    }
 
     // -----------------------------------------------------------------------
     // Shared pieces
@@ -619,6 +670,9 @@ window.__ModuleLoader__.load({
         t('totalValue', { cost: formatCNY(record.costNano) }),
       )));
       sections.push(h('div', { key: 'sub', className: 'dsh-tc-sub' }, t('subtitle', { date: data.rateDate })));
+      if (record.family === 'mixed') {
+        sections.push(h('div', { key: 'mixed', className: 'dsh-tc-note' }, t('mixedHint')));
+      }
       sections.push(h('div', { key: 'details' }, detailRows(t, [
         { label: t('detail.period'), value: periodLabel(t, record.period) },
         { label: t('detail.model'), value: familyLabel(record.family) },
@@ -660,6 +714,7 @@ window.__ModuleLoader__.load({
       const { t } = useLocale(ctx);
       const dialog = useStatDialog();
       const bubble = useHoverBubble();
+      const ids = useControlIds();
       const panelStyle = useAnchoredPosition(dialog.open, dialog.rootRef, dialog.panelRef);
       const bubbleStyle = useAnchoredPosition(bubble.visible && !dialog.open, dialog.rootRef, bubble.panelRef);
       const visible = !!(data && data.totals && data.totals.pricedAttempts > 0);
@@ -685,14 +740,16 @@ window.__ModuleLoader__.load({
       const trigger = h('span', {
         ref: dialog.rootRef,
         className: 'dsh-tc-anchor dsh-tc-composer-anchor',
-        'data-composer-stat': 'token-cost',
+        'data-composer-stat': 'cny-cost',
         onMouseEnter: bubble.enter,
         onMouseLeave: bubble.leave,
       }, h('button', {
         type: 'button',
         className: 'dsh-tc-pill',
         'aria-haspopup': 'dialog',
+        'aria-controls': ids.panel,
         'aria-expanded': dialog.open ? 'true' : 'false',
+        'aria-describedby': bubble.visible && !dialog.open ? ids.bubble : undefined,
         'aria-label': ariaLabel,
         onClick: () => dialog.setOpen(!dialog.open),
         onFocus: bubble.enterNow,
@@ -706,6 +763,7 @@ window.__ModuleLoader__.load({
         ? ReactDOM.createPortal(
           h('div', {
             ref: bubble.panelRef,
+            id: ids.bubble,
             className: 'dsh-tc-bubble',
             role: 'tooltip',
             style: bubbleStyle || MEASURE_STYLE,
@@ -718,30 +776,33 @@ window.__ModuleLoader__.load({
         ? ReactDOM.createPortal(
           h('div', {
             ref: dialog.panelRef,
+            id: ids.panel,
             className: 'dsh-tc-panel',
             role: 'dialog',
+            'aria-modal': 'true',
             'aria-label': t('panelTitle'),
+            tabIndex: -1,
             style: panelStyle || MEASURE_STYLE,
           }, h(SessionCostPanel, { __ctx: ctx, sessionId, data, t })),
           document.body,
         )
         : null;
 
-      return h(React.Fragment, null, trigger, bubbleEl, panelEl,
-        h('style', { dangerouslySetInnerHTML: { __html: CSS } }));
+      return h(React.Fragment, null, trigger, bubbleEl, panelEl);
     }
 
     // -----------------------------------------------------------------------
     // Completed-turn cost pill (inside the copy/like/usage/time action row)
     // -----------------------------------------------------------------------
-    function TurnCostControl(props) {
+    function TurnCostControlBase(props) {
       const ctx = props.__ctx;
       const messageId = props.messageId;
       const data = useProjection(ctx, props.sessionId, TURN_KEY);
       const { t } = useLocale(ctx);
       const dialog = useStatDialog();
       const bubble = useHoverBubble();
-      const chatTurn = useChatTurnForMessage(props, messageId);
+      const ids = useControlIds();
+      const chatTurn = props.chatTurn ?? null;
       const panelStyle = useAnchoredPosition(dialog.open, dialog.rootRef, dialog.panelRef);
       const bubbleStyle = useAnchoredPosition(bubble.visible && !dialog.open, dialog.rootRef, bubble.panelRef);
       const record = findTurnRecord(data, messageId, chatTurn);
@@ -779,7 +840,9 @@ window.__ModuleLoader__.load({
         type: 'button',
         className: 'dsh-tc-turn-pill',
         'aria-haspopup': 'dialog',
+        'aria-controls': ids.panel,
         'aria-expanded': dialog.open ? 'true' : 'false',
+        'aria-describedby': bubble.visible && !dialog.open ? ids.bubble : undefined,
         'aria-label': ariaLabel,
         onClick: () => dialog.setOpen(!dialog.open),
         onFocus: bubble.enterNow,
@@ -793,6 +856,7 @@ window.__ModuleLoader__.load({
         ? ReactDOM.createPortal(
           h('div', {
             ref: bubble.panelRef,
+            id: ids.bubble,
             className: 'dsh-tc-bubble',
             role: 'tooltip',
             style: bubbleStyle || MEASURE_STYLE,
@@ -805,9 +869,12 @@ window.__ModuleLoader__.load({
         ? ReactDOM.createPortal(
           h('div', {
             ref: dialog.panelRef,
+            id: ids.panel,
             className: 'dsh-tc-panel',
             role: 'dialog',
+            'aria-modal': 'true',
             'aria-label': t('turnPanelTitle'),
+            tabIndex: -1,
             style: panelStyle || MEASURE_STYLE,
           }, h(TurnCostPanel, { data, record, t })),
           document.body,
@@ -817,6 +884,22 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null, trigger, bubbleEl, panelEl);
     }
 
+    /**
+     * The optional Chat-snapshot fallback uses a host hook, so it lives in its
+     * own component: the wrapper below chooses a variant by mounting one of
+     * them, keeping each component's hook order unconditional.
+     */
+    function TurnCostControlWithChat(props) {
+      const chatTurn = useChatTurnForMessage(props.useChat, props.messageId);
+      return h(TurnCostControlBase, Object.assign({}, props, { chatTurn }));
+    }
+
+    function TurnCostControl(props) {
+      return typeof props.useChat === 'function'
+        ? h(TurnCostControlWithChat, props)
+        : h(TurnCostControlBase, props);
+    }
+
     function withContext(Component, ctx) {
       return function BoundCostComponent(props) {
         return h(Component, Object.assign({}, props, { __ctx: ctx }));
@@ -824,14 +907,15 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots'],
+      inject: ['slots', 'sessions', 'locale'],
       apply(ctx) {
+        installStyles();
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
-          { name: 'conversation.composer.dock', id: 'token-cost', order: 2 },
+          { name: 'conversation.composer.dock', id: 'cny-cost', order: 2 },
           withContext(SessionCostControl, ctx),
         ));
         ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register(
-          { name: 'conversation.chat.assistant-actions', id: 'token-cost', order: 20 },
+          { name: 'conversation.chat.assistant-actions', id: 'cny-cost', order: 20 },
           withContext(TurnCostControl, ctx),
         ));
       },

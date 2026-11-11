@@ -22,5 +22,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   that fold the committed session log with the same replacement semantics as
   the host `tokenUsage` projection, in integer nanoyuan.
 - Zero runtime dependencies; pure pricing/fold logic covered by
-  `node --test test/logic.test.mjs` (17 tests).
-- Locale files (`en`, `zh`) and a static locale-key consistency check.
+  `node --test test/logic.test.mjs` (21 tests).
+- Locale files (`en`, `zh`) and static locale-key / package-consistency checks.
+
+### Notes
+
+- Published as `dsh-cny-cost`. Earlier development snapshots used the working
+  name `dsh-token-cost`, which belongs to an unrelated npm package; the final
+  package, cordis row id (`cny-cost`) and client loader id are all renamed to
+  avoid collisions.
+- Pricing is stored at 0.001 CNY per million tokens (1 nanoyuan per token);
+  finer configured prices are rejected at activation instead of being rounded.
+- Usage buckets are kept verbatim from the log, so the priced token totals
+  always equal the host `tokenUsage` projection.

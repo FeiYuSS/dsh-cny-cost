@@ -27,14 +27,13 @@
   },
   "icon": "./icon.svg",
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
+  "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
@@ -44,28 +43,32 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
+    "README.en.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "scripts"
   ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
   "scripts": {
     "test": "node --test test/logic.test.mjs",
     "check:locale": "node scripts/check-locale-keys.mjs",
-    "check": "npm run test && npm run check:locale",
+    "check:package": "node scripts/check-package.mjs",
+    "check": "npm run test && npm run check:locale && npm run check:package",
     "verify:host": "node scripts/verify-against-host.mjs"
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
-    "compatibility": {
-      "dshReleases": {
-        "0.2.2-rc.1": "compatible"
-      }
-    },
     "client": {
       "platform": "web",
       "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-chat"
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-locale"
       ]
     }
   }

@@ -81,6 +81,6 @@ export async function apply(ctx, config) {
   });
 
   ctx.logger.info(
-    `token-cost: pricing ${cfg.rateDate} installed (models: ${Object.keys(cfg.models).join(', ')})`,
+    `cny-cost: pricing ${cfg.rateDate} installed (models: ${Object.keys(cfg.models).join(', ')})`,
   );
 }

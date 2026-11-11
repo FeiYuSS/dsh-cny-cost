@@ -24,11 +24,23 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Syntax check (host, client and scripts)
+        run: |
+          node --check index.js
+          node --check logic.js
+          node --check client.js
+          node --check scripts/check-locale-keys.mjs
+          node --check scripts/check-package.mjs
+          node --check scripts/verify-against-host.mjs
+
       - name: Unit tests (pricing and fold logic)
         run: node --test test/logic.test.mjs
 
       - name: Locale keys used from client.js exist in both locales
         run: node scripts/check-locale-keys.mjs
+
+      - name: Package consistency (name, patch row, loader id, exports)
+        run: node scripts/check-package.mjs
 
       - name: Package contents (npm pack dry run)
         run: npm pack --dry-run

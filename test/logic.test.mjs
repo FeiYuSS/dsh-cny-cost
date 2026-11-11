@@ -254,7 +254,7 @@ test('model switch mid-session is priced per attempt', () => {
   assert.equal(viewTokenCost(state, cfg).models.length, 2);
 });
 
-test('token-cost state passes its own state validator', () => {
+test('cny-cost state passes its own state validator', () => {
   const state = foldCost([
     header(1, 'deepseek-account', 'deepseek-flash', PEAK_TUE),
     message(2, 1, 1, usage(100, 200, 300), PEAK_TUE),
@@ -327,4 +327,61 @@ test('turn view exposes rates so the chat line can show formulas', () => {
   const flash = view.rates.find((rate) => rate.family === 'flash');
   assert.equal(flash.peak.out, 8);
   assert.equal(flash.idle.out, 4);
+});
+
+// ---------------------------------------------------------------------------
+// Robustness
+// ---------------------------------------------------------------------------
+
+test('prices finer than the nanoyuan resolution are rejected instead of rounded', () => {
+  assert.throws(
+    () => normalizeConfig({ families: { flash: { peak: { miss: 0.0004 } } } }),
+    /multiple of 0\.001 CNY per million tokens/,
+  );
+  assert.throws(() => normalizeConfig({ writePrice: 0.0005 }), /multiple of 0\.001/);
+  const oneNano = normalizeConfig({ families: { flash: { peak: { miss: 0.001 } } } });
+  assert.equal(priceFor('deepseek-flash', 'peak', oneNano).missN, 1);
+});
+
+test('priced buckets keep the host usage values verbatim', () => {
+  assert.deepEqual(
+    bucketsOf({ inputTokens: 1.5, outputTokens: -2, cacheReadTokens: undefined }),
+    { hit: 0, miss: 1.5, write: 0, out: -2 },
+  );
+});
+
+test('state validators reject corrupted nested records', () => {
+  const state = foldCost([
+    header(1, 'deepseek-account', 'deepseek-flash', PEAK_TUE),
+    message(2, 1, 1, usage(100, 200, 300), PEAK_TUE),
+  ]);
+  const corrupted = structuredClone(state);
+  const [key] = Object.keys(corrupted.totals.models);
+  corrupted.totals.models[key].attempts = -1;
+  assert.throws(() => validateTokenCostState(corrupted), /models.*attempts/);
+
+  const corruptedTokens = structuredClone(state);
+  corruptedTokens.totals.tokens.hit = 'many';
+  assert.throws(() => validateTokenCostState(corruptedTokens), /tokens\.hit/);
+});
+
+test('turn state validator rejects bad records and mixed turns stay valid', () => {
+  const state = foldTurns([
+    header(1, 'deepseek-account', 'deepseek-flash', PEAK_TUE),
+    message(2, 1, 1, usage(0, 1000, 0), PEAK_TUE),
+    header(3, 'deepseek-account', 'deepseek-v4-pro', PEAK_TUE),
+    message(4, 1, 2, usage(0, 1000, 0), PEAK_TUE),
+    { type: 'turn/end', seq: 5, time: PEAK_TUE, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]);
+  assert.equal(state.turns[0].family, 'mixed');
+  validateTurnCostView(viewTurnCost(state, cfg));
+  validateTurnCostState(state);
+
+  const corrupted = structuredClone(state);
+  corrupted.turns[0].period = 'whenever';
+  assert.throws(() => validateTurnCostState(corrupted), /period is invalid/);
+
+  const negative = structuredClone(state);
+  negative.turns[0].attempts = -1;
+  assert.throws(() => validateTurnCostState(negative), /attempts/);
 });

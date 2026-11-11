@@ -60,13 +60,19 @@ const FAMILY_KEYS = new Set(['peak', 'idle']);
 const BUCKET_KEYS = new Set(['hit', 'miss', 'out']);
 const PERIOD_MODES = new Set(['auto', 'peak', 'idle']);
 const HOLIDAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * Internal prices are stored in nanoyuan per token. A price is given in CNY per
+ * million tokens, so one unit step of 0.001 CNY/M is exactly one nanoyuan per
+ * token; finer prices cannot be represented and are rejected instead of rounded.
+ */
+const NANO_PER_PRICE_STEP = 1000;
 
 const BEIJING_OFFSET_MS = 8 * 3600 * 1000;
 /** Peak windows in Beijing wall-clock hours: [start, end). */
 const PEAK_WINDOWS = [[9, 12], [14, 18]];
 
 function fail(message) {
-  throw new Error(`token-cost: ${message}`);
+  throw new Error(`cny-cost: ${message}`);
 }
 
 function isPlainObject(value) {
@@ -79,6 +85,19 @@ function nonNegativeNumber(value, fallback, what) {
     fail(`${what} must be a non-negative number`);
   }
   return value;
+}
+
+/**
+ * Convert a CNY-per-million-token price into integer nanoyuan per token.
+ * Prices finer than the storage resolution are rejected rather than rounded, so
+ * the breakdown a user configures always matches the amount charged.
+ */
+function priceNanoOf(value, what) {
+  const nano = value * NANO_PER_PRICE_STEP;
+  if (Math.abs(nano - Math.round(nano)) > 1e-6) {
+    fail(`${what} must be a multiple of 0.001 CNY per million tokens`);
+  }
+  return Math.round(nano);
 }
 
 function cloneFamily(family) {
@@ -170,10 +189,10 @@ export function normalizeConfig(raw) {
     priceNano[name] = {};
     for (const period of ['peak', 'idle']) {
       priceNano[name][period] = {
-        hitN: Math.round(family[period].hit * 1000),
-        missN: Math.round(family[period].miss * 1000),
-        outN: Math.round(family[period].out * 1000),
-        writeN: Math.round(writePrice * 1000),
+        hitN: priceNanoOf(family[period].hit, `families.${name}.${period}.hit`),
+        missN: priceNanoOf(family[period].miss, `families.${name}.${period}.miss`),
+        outN: priceNanoOf(family[period].out, `families.${name}.${period}.out`),
+        writeN: priceNanoOf(writePrice, 'writePrice'),
       };
     }
     rateView.push({
@@ -242,17 +261,25 @@ export function priceFor(model, period, cfg) {
   return table === undefined ? null : table[period];
 }
 
-function nonNegativeInt(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+/**
+ * One provider usage counter, kept exactly as the host `tokenUsage` projection
+ * keeps it (`value ?? 0`) so the priced buckets stay equal to the token counts
+ * the host displays, including fractional or negative correction samples.
+ * @param {unknown} value raw usage field from the session log.
+ * @returns {number} usage count.
+ */
+function usageCount(value) {
+  if (value === undefined || value === null) return 0;
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /** Provider usage buckets in the host's tokenUsage shape. */
 export function bucketsOf(usage) {
   return {
-    hit: nonNegativeInt(usage.cacheReadTokens),
-    miss: nonNegativeInt(usage.inputTokens),
-    write: nonNegativeInt(usage.cacheWriteTokens),
-    out: nonNegativeInt(usage.outputTokens),
+    hit: usageCount(usage.cacheReadTokens),
+    miss: usageCount(usage.inputTokens),
+    write: usageCount(usage.cacheWriteTokens),
+    out: usageCount(usage.outputTokens),
   };
 }
 
@@ -620,6 +647,11 @@ function assertNumber(value, what) {
   if (typeof value !== 'number' || !Number.isFinite(value)) fail(`${what} must be a finite number`);
 }
 
+function assertNonNegativeInt(value, what) {
+  assertNumber(value, what);
+  if (value < 0 || !Number.isInteger(value)) fail(`${what} must be a non-negative integer`);
+}
+
 function assertBucketsShape(buckets, what) {
   assertObject(buckets, what);
   for (const key of ['hit', 'miss', 'write', 'out']) assertNumber(buckets[key], `${what}.${key}`);
@@ -627,26 +659,72 @@ function assertBucketsShape(buckets, what) {
 
 function assertPeriodShape(period, what) {
   assertObject(period, what);
-  assertNumber(period.attempts, `${what}.attempts`);
+  assertNonNegativeInt(period.attempts, `${what}.attempts`);
   assertNumber(period.costNano, `${what}.costNano`);
   assertBucketsShape(period.tokens, `${what}.tokens`);
+}
+
+function assertFamily(value, what) {
+  if (value !== null && typeof value !== 'string') fail(`${what} must be a string or null`);
 }
 
 function assertSample(sample, what) {
   if (sample === null) return;
   assertObject(sample, what);
-  assertNumber(sample.turn, `${what}.turn`);
-  assertNumber(sample.step, `${what}.step`);
+  assertNonNegativeInt(sample.turn, `${what}.turn`);
+  assertNonNegativeInt(sample.step, `${what}.step`);
   assertNumber(sample.costNano, `${what}.costNano`);
   assertBucketsShape(sample.buckets, `${what}.buckets`);
   if (sample.period !== 'peak' && sample.period !== 'idle') fail(`${what}.period is invalid`);
-  if (sample.family !== null && typeof sample.family !== 'string') fail(`${what}.family is invalid`);
+  assertFamily(sample.family, `${what}.family`);
 }
 
 function assertOptionalId(value, what) {
   if (value === null || value === undefined) return;
   if (typeof value !== 'string') fail(`${what} must be a string or null`);
 }
+
+function assertTotalsShape(totals, what) {
+  assertObject(totals, what);
+  assertNumber(totals.costNano, `${what}.costNano`);
+  assertNonNegativeInt(totals.pricedAttempts, `${what}.pricedAttempts`);
+  assertNonNegativeInt(totals.unpricedAttempts, `${what}.unpricedAttempts`);
+  assertBucketsShape(totals.tokens, `${what}.tokens`);
+  assertPeriodShape(totals.peak, `${what}.peak`);
+  assertPeriodShape(totals.idle, `${what}.idle`);
+  assertObject(totals.models, `${what}.models`);
+  for (const key of Object.keys(totals.models)) {
+    const model = totals.models[key];
+    const where = `${what}.models[${JSON.stringify(key)}]`;
+    assertObject(model, where);
+    if (typeof model.provider !== 'string') fail(`${where}.provider must be a string`);
+    if (typeof model.model !== 'string') fail(`${where}.model must be a string`);
+    assertFamily(model.family, `${where}.family`);
+    assertNonNegativeInt(model.attempts, `${where}.attempts`);
+    assertNumber(model.costNano, `${where}.costNano`);
+    assertBucketsShape(model.tokens, `${where}.tokens`);
+    assertPeriodShape(model.peak, `${where}.peak`);
+    assertPeriodShape(model.idle, `${where}.idle`);
+  }
+}
+
+function assertTurnRecordShape(turn, what) {
+  assertObject(turn, what);
+  assertNonNegativeInt(turn.turn, `${what}.turn`);
+  assertNonNegativeInt(turn.closeSeq, `${what}.closeSeq`);
+  assertOptionalId(turn.messageId, `${what}.messageId`);
+  assertNumber(turn.costNano, `${what}.costNano`);
+  assertBucketsShape(turn.tokens, `${what}.tokens`);
+  assertNonNegativeInt(turn.attempts, `${what}.attempts`);
+  assertNonNegativeInt(turn.pricedAttempts, `${what}.pricedAttempts`);
+  assertNonNegativeInt(turn.unpricedAttempts, `${what}.unpricedAttempts`);
+  if (!TURN_PERIODS.has(turn.period)) fail(`${what}.period is invalid`);
+  assertFamily(turn.family, `${what}.family`);
+  assertPeriodShape(turn.peak, `${what}.peak`);
+  assertPeriodShape(turn.idle, `${what}.idle`);
+}
+
+const TURN_PERIODS = new Set(['peak', 'idle', 'mixed', 'none']);
 
 /**
  * Shape validation for the session-level unit state (checkpoint restore path).
@@ -655,14 +733,7 @@ function assertOptionalId(value, what) {
 export function validateTokenCostState(state) {
   assertObject(state, 'state');
   assertSample(state.last, 'state.last');
-  assertObject(state.totals, 'state.totals');
-  assertNumber(state.totals.costNano, 'state.totals.costNano');
-  assertNumber(state.totals.pricedAttempts, 'state.totals.pricedAttempts');
-  assertNumber(state.totals.unpricedAttempts, 'state.totals.unpricedAttempts');
-  assertBucketsShape(state.totals.tokens, 'state.totals.tokens');
-  assertPeriodShape(state.totals.peak, 'state.totals.peak');
-  assertPeriodShape(state.totals.idle, 'state.totals.idle');
-  assertObject(state.totals.models, 'state.totals.models');
+  assertTotalsShape(state.totals, 'state.totals');
   return state;
 }
 
@@ -672,18 +743,12 @@ export function validateTurnCostState(state) {
   assertSample(state.last, 'state.last');
   if (state.open !== null) {
     assertObject(state.open, 'state.open');
-    assertNumber(state.open.turn, 'state.open.turn');
-    assertObject(state.open.totals, 'state.open.totals');
+    assertNonNegativeInt(state.open.turn, 'state.open.turn');
     assertOptionalId(state.open.lastMessageId, 'state.open.lastMessageId');
+    assertTotalsShape(state.open.totals, 'state.open.totals');
   }
   if (!Array.isArray(state.turns)) fail('state.turns must be an array');
-  for (const turn of state.turns) {
-    assertNumber(turn.turn, 'turn.turn');
-    assertNumber(turn.closeSeq, 'turn.closeSeq');
-    assertOptionalId(turn.messageId, 'turn.messageId');
-    assertPeriodShape(turn.peak, 'turn.peak');
-    assertPeriodShape(turn.idle, 'turn.idle');
-  }
+  for (const turn of state.turns) assertTurnRecordShape(turn, 'state.turns[]');
   return state;
 }
 
@@ -691,6 +756,7 @@ function assertRates(rates) {
   if (!Array.isArray(rates)) fail('view.rates must be an array');
   for (const rate of rates) {
     assertObject(rate, 'view.rates[]');
+    if (typeof rate.family !== 'string') fail('view.rates[].family must be a string');
     assertNumber(rate.write, 'view.rates[].write');
     assertObject(rate.peak, 'view.rates[].peak');
     assertObject(rate.idle, 'view.rates[].idle');
@@ -709,17 +775,24 @@ export function validateTokenCostView(view) {
   if (view.currency !== 'CNY') fail('view.currency must be CNY');
   assertObject(view.totals, 'view.totals');
   assertNumber(view.totals.costNano, 'view.totals.costNano');
-  assertNumber(view.totals.pricedAttempts, 'view.totals.pricedAttempts');
-  assertNumber(view.totals.unpricedAttempts, 'view.totals.unpricedAttempts');
+  assertNonNegativeInt(view.totals.pricedAttempts, 'view.totals.pricedAttempts');
+  assertNonNegativeInt(view.totals.unpricedAttempts, 'view.totals.unpricedAttempts');
   assertBucketsShape(view.totals.tokens, 'view.totals.tokens');
   assertObject(view.periods, 'view.periods');
   assertPeriodShape(view.periods.peak, 'view.periods.peak');
   assertPeriodShape(view.periods.idle, 'view.periods.idle');
   if (!Array.isArray(view.models)) fail('view.models must be an array');
   for (const model of view.models) {
-    assertNumber(model.costNano, 'view.models[].costNano');
-    assertPeriodShape(model.peak, 'view.models[].peak');
-    assertPeriodShape(model.idle, 'view.models[].idle');
+    const what = 'view.models[]';
+    assertObject(model, what);
+    if (typeof model.provider !== 'string') fail(`${what}.provider must be a string`);
+    if (typeof model.model !== 'string') fail(`${what}.model must be a string`);
+    assertFamily(model.family, `${what}.family`);
+    assertNonNegativeInt(model.attempts, `${what}.attempts`);
+    assertNumber(model.costNano, `${what}.costNano`);
+    assertBucketsShape(model.tokens, `${what}.tokens`);
+    assertPeriodShape(model.peak, `${what}.peak`);
+    assertPeriodShape(model.idle, `${what}.idle`);
   }
   assertRates(view.rates);
   return view;
@@ -732,13 +805,20 @@ export function validateTurnCostView(view) {
   assertRates(view.rates);
   if (!Array.isArray(view.turns)) fail('view.turns must be an array');
   for (const turn of view.turns) {
-    assertNumber(turn.turn, 'view.turns[].turn');
-    assertNumber(turn.closeSeq, 'view.turns[].closeSeq');
-    assertOptionalId(turn.messageId, 'view.turns[].messageId');
-    assertNumber(turn.costNano, 'view.turns[].costNano');
-    assertBucketsShape(turn.tokens, 'view.turns[].tokens');
-    assertPeriodShape(turn.peak, 'view.turns[].peak');
-    assertPeriodShape(turn.idle, 'view.turns[].idle');
+    const what = 'view.turns[]';
+    assertObject(turn, what);
+    assertNonNegativeInt(turn.turn, `${what}.turn`);
+    assertNonNegativeInt(turn.closeSeq, `${what}.closeSeq`);
+    assertOptionalId(turn.messageId, `${what}.messageId`);
+    assertNumber(turn.costNano, `${what}.costNano`);
+    assertBucketsShape(turn.tokens, `${what}.tokens`);
+    assertNonNegativeInt(turn.attempts, `${what}.attempts`);
+    assertNonNegativeInt(turn.pricedAttempts, `${what}.pricedAttempts`);
+    assertNonNegativeInt(turn.unpricedAttempts, `${what}.unpricedAttempts`);
+    if (!TURN_PERIODS.has(turn.period)) fail(`${what}.period is invalid`);
+    assertFamily(turn.family, `${what}.family`);
+    assertPeriodShape(turn.peak, `${what}.peak`);
+    assertPeriodShape(turn.idle, `${what}.idle`);
   }
   return view;
 }
