@@ -1,0 +1,27 @@
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+pnpm-lock.yaml
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs, coverage, test output
+*.log
+coverage/
+.nyc_output/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Build artifacts and packed tarballs
+*.tgz
+*.tar.gz
+dist/
+.tmp/

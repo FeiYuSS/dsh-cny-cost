@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Live token cost",
+    "description": "Shows the theoretical CNY cost of DeepSeek official model usage under the composer and at the end of every turn, with a detailed per-model, per-period pricing breakdown."
+  }
+}

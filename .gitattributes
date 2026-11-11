@@ -1,0 +1,22 @@
+# Normalize line endings so the repo stays byte-identical across platforms.
+* text=auto eol=lf
+
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+*.svg     text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Images and archives must stay binary.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.webp    binary
+*.gif     binary
+*.zst     binary
+*.zstd    binary
+*.tgz     binary
