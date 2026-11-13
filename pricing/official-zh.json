@@ -1,8 +1,8 @@
 {
   "version": 1,
   "sourceUrl": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing.md",
-  "fetchedAt": "2026-11-11T08:52:32.018Z",
-  "hash": "262394bb252ee92739803d580b9735026677448127ec3af6c8e0123edbc6d34e",
+  "fetchedAt": "2026-11-13T20:32:11.478Z",
+  "hash": "66833789f6a4f61352bbf355187c084cf96a380db74c9a31787775067828c132",
   "facts": {
     "currency": "CNY",
     "models": {
@@ -43,18 +43,7 @@
     },
     "peakRule": "空闲时段价格为高峰时段价格的一半。北京时间周一至周五（不含中国法定节假日）9:00 - 12:00、14:00 - 18:00 为高峰时段；其余时段，包括周末及中国法定节假日全天均为空闲时段。",
     "aliases": "模型名请使用 `deepseek-flash`。旧模型名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 仍可调用，但对应模型已下线，请求将由 DeepSeek-V4.1-Flash-1017 模型提供服务，并按 Flash 价格计费。",
-    "extras": {
-      "search": {
-        "unit": "每 1,000 次成功请求",
-        "price": 5,
-        "currency": "CNY"
-      },
-      "fetch": {
-        "unit": "每 1,000 次成功请求",
-        "price": 5,
-        "currency": "CNY"
-      }
-    },
-    "deduction": "模型调用费用 = token 消耗量 × 模型单价；Search 和 Fetch 按上表中的成功请求次数计费。对应的费用将直接从充值余额或赠送余额中进行扣减。 当充值余额与赠送余额同时存在时，优先扣减赠送余额。 产品价格可能发生变动，DeepSeek 保留修改价格的权利。请您依据实际用量按需充值，定期查看此页面以获知最新价格信息。"
+    "extras": {},
+    "deduction": "模型调用费用 = token 消耗量 × 模型单价；搜索（文字、图片）和网页抓取按上表价格按次计费。对应的费用将直接从充值余额或赠送余额中进行扣减。 当充值余额与赠送余额同时存在时，优先扣减赠送余额。 产品价格可能发生变动，DeepSeek 保留修改价格的权利。请您依据实际用量按需充值，定期查看此页面以获知最新价格信息。"
   }
 }
